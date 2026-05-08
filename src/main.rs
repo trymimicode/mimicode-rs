@@ -1,23 +1,32 @@
 use anyhow::Result;
-use clap::Parser;
 
 mod agent;
 mod providers;
 mod types;
 
-#[derive(Parser)]
-#[command(name = "mimicode", about = "A minimal CLI coding agent")]
-struct Cli {
-    /// Prompt to send; omit to enter interactive mode
-    prompt: Option<String>,
-
-    /// Anthropic API key
-    #[arg(long, env = "ANTHROPIC_API_KEY")]
-    api_key: String,
-}
+use types::{Message, MessageContent};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
-    agent::run(&cli.api_key, cli.prompt).await
+    let messages = vec![
+        Message {
+            role: "user".into(),
+            content: MessageContent::Text("Say 'proof of life' and nothing else.".into()),
+        },
+    ];
+
+    let reply = providers::call_claude(&messages, "", "claude-haiku-4-5-20251001").await?;
+
+    match reply.content {
+        types::MessageContent::Blocks(blocks) => {
+            for block in blocks {
+                if let types::ContentBlock::Text { text } = block {
+                    println!("{}", text);
+                }
+            }
+        }
+        types::MessageContent::Text(t) => println!("{}", t),
+    }
+
+    Ok(())
 }

@@ -1,28 +1,33 @@
+use std::env;
+
 use anyhow::{Context, Result};
 use reqwest::Client;
 
-use crate::types::{ApiRequest, ApiResponse, Message};
+use crate::types::{ApiRequest, ApiResponse, Message, MessageContent};
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
-const MODEL: &str = "claude-haiku-4-5-20251001";
 const MAX_TOKENS: u32 = 8096;
 
-pub async fn call_claude(client: &Client, api_key: &str, messages: &[Message]) -> Result<ApiResponse> {
+pub async fn call_claude(messages: &[Message], system: &str, model: &str) -> Result<Message> {
+    let api_key = env::var("ANTHROPIC_API_KEY").context("ANTHROPIC_API_KEY not set")?;
+
     let request = ApiRequest {
-        model: MODEL.to_string(),
+        model: model.to_string(),
         max_tokens: MAX_TOKENS,
+        system: if system.is_empty() { None } else { Some(system.to_string()) },
         messages: messages.to_vec(),
     };
 
+    let client = Client::new();
     let response = client
         .post(API_URL)
-        .header("x-api-key", api_key)
+        .header("x-api-key", &api_key)
         .header("anthropic-version", "2023-06-01")
         .header("content-type", "application/json")
         .json(&request)
         .send()
         .await
-        .context("Failed to send request to Anthropic API")?;
+        .context("failed to reach Anthropic API")?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -30,8 +35,13 @@ pub async fn call_claude(client: &Client, api_key: &str, messages: &[Message]) -
         anyhow::bail!("API error {}: {}", status, body);
     }
 
-    response
+    let api_response = response
         .json::<ApiResponse>()
         .await
-        .context("Failed to parse API response")
+        .context("failed to parse API response")?;
+
+    Ok(Message {
+        role: api_response.role,
+        content: MessageContent::Blocks(api_response.content),
+    })
 }

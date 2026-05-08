@@ -1,19 +1,19 @@
 use std::io::{self, BufRead, Write};
 
 use anyhow::Result;
-use reqwest::Client;
 
 use crate::providers::call_claude;
 use crate::types::{ContentBlock, Message, MessageContent};
 
-pub async fn run(api_key: &str, prompt: Option<String>) -> Result<()> {
-    let client = Client::new();
+const MODEL: &str = "claude-haiku-4-5-20251001";
+
+pub async fn run(system: &str, prompt: Option<String>) -> Result<()> {
     let mut messages: Vec<Message> = Vec::new();
 
     if let Some(text) = prompt {
         messages.push(Message { role: "user".into(), content: MessageContent::Text(text) });
-        let resp = call_claude(&client, api_key, &messages).await?;
-        println!("{}", extract_text(&resp.content));
+        let reply = call_claude(&messages, system, MODEL).await?;
+        println!("{}", extract_text(&reply));
         return Ok(());
     }
 
@@ -29,24 +29,26 @@ pub async fn run(api_key: &str, prompt: Option<String>) -> Result<()> {
         }
 
         messages.push(Message { role: "user".into(), content: MessageContent::Text(trimmed.into()) });
-        let resp = call_claude(&client, api_key, &messages).await?;
-        let text = extract_text(&resp.content);
-        println!("\n{}\n", text);
-        messages.push(Message { role: "assistant".into(), content: MessageContent::Text(text) });
+        let reply = call_claude(&messages, system, MODEL).await?;
+        println!("\n{}\n", extract_text(&reply));
+        messages.push(reply);
     }
 
     Ok(())
 }
 
-fn extract_text(blocks: &[ContentBlock]) -> String {
-    blocks
-        .iter()
-        .filter_map(|b| match b {
-            ContentBlock::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("")
+fn extract_text(msg: &Message) -> String {
+    match &msg.content {
+        MessageContent::Text(t) => t.clone(),
+        MessageContent::Blocks(blocks) => blocks
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(""),
+    }
 }
 
 fn read_line() -> Result<String> {

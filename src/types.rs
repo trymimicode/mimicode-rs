@@ -35,6 +35,8 @@ pub struct Message {
 pub struct ApiRequest {
     pub model: String,
     pub max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
     pub messages: Vec<Message>,
 }
 

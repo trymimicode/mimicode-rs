@@ -1,21 +1,25 @@
 use anyhow::Result;
+use clap::Parser;
 
 mod agent;
 mod providers;
 mod types;
 
-use types::Message;
+const SYSTEM: &str = "You are a minimal CLI coding agent. Be concise and precise.";
+
+#[derive(Parser)]
+#[command(name = "mimicode", about = "A minimal CLI coding agent")]
+struct Cli {
+    /// Optional session name (reserved for future persistence)
+    #[arg(short, long)]
+    session: Option<String>,
+
+    /// Prompt to send; omit to enter interactive mode
+    prompt: Option<String>,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut history: Vec<Message> = Vec::new();
-    let system = "";
-
-    let r1 = agent::agent_turn("My name is Paul. Just say 'got it'.", &mut history, system).await?;
-    println!("Turn 1: {}", r1);
-
-    let r2 = agent::agent_turn("What is my name?", &mut history, system).await?;
-    println!("Turn 2: {}", r2);
-
-    Ok(())
+    let cli = Cli::parse();
+    agent::run(SYSTEM, cli.prompt).await
 }

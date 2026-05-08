@@ -7,13 +7,26 @@ use crate::types::{ContentBlock, Message, MessageContent};
 
 const MODEL: &str = "claude-haiku-4-5-20251001";
 
+pub async fn agent_turn(
+    user_msg: &str,
+    history: &mut Vec<Message>,
+    system: &str,
+) -> Result<String> {
+    history.push(Message { role: "user".into(), content: MessageContent::Text(user_msg.into()) });
+
+    let reply = call_claude(history, system, MODEL).await?;
+    let text = extract_text(&reply);
+    history.push(reply);
+
+    Ok(text)
+}
+
 pub async fn run(system: &str, prompt: Option<String>) -> Result<()> {
-    let mut messages: Vec<Message> = Vec::new();
+    let mut history: Vec<Message> = Vec::new();
 
     if let Some(text) = prompt {
-        messages.push(Message { role: "user".into(), content: MessageContent::Text(text) });
-        let reply = call_claude(&messages, system, MODEL).await?;
-        println!("{}", extract_text(&reply));
+        let reply = agent_turn(&text, &mut history, system).await?;
+        println!("{}", reply);
         return Ok(());
     }
 
@@ -28,10 +41,8 @@ pub async fn run(system: &str, prompt: Option<String>) -> Result<()> {
             break;
         }
 
-        messages.push(Message { role: "user".into(), content: MessageContent::Text(trimmed.into()) });
-        let reply = call_claude(&messages, system, MODEL).await?;
-        println!("\n{}\n", extract_text(&reply));
-        messages.push(reply);
+        let reply = agent_turn(trimmed, &mut history, system).await?;
+        println!("\n{}\n", reply);
     }
 
     Ok(())

@@ -4,29 +4,18 @@ mod agent;
 mod providers;
 mod types;
 
-use types::{Message, MessageContent};
+use types::Message;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let messages = vec![
-        Message {
-            role: "user".into(),
-            content: MessageContent::Text("Say 'proof of life' and nothing else.".into()),
-        },
-    ];
+    let mut history: Vec<Message> = Vec::new();
+    let system = "";
 
-    let reply = providers::call_claude(&messages, "", "claude-haiku-4-5-20251001").await?;
+    let r1 = agent::agent_turn("My name is Paul. Just say 'got it'.", &mut history, system).await?;
+    println!("Turn 1: {}", r1);
 
-    match reply.content {
-        types::MessageContent::Blocks(blocks) => {
-            for block in blocks {
-                if let types::ContentBlock::Text { text } = block {
-                    println!("{}", text);
-                }
-            }
-        }
-        types::MessageContent::Text(t) => println!("{}", t),
-    }
+    let r2 = agent::agent_turn("What is my name?", &mut history, system).await?;
+    println!("Turn 2: {}", r2);
 
     Ok(())
 }

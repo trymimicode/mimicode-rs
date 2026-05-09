@@ -1,4 +1,5 @@
 pub mod app;
+pub mod commands;
 pub mod events;
 pub mod ui;
 
@@ -18,7 +19,7 @@ use crate::types::{ContentBlock, Message, MessageContent};
 use app::{App, ChatMessage, MessageType, StreamEvent};
 use events::{AppAction, handle_event};
 
-fn generate_session_id() -> String {
+pub(super) fn generate_session_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -42,11 +43,16 @@ pub fn main(session_id: Option<String>) {
         .filter_map(|v| serde_json::from_value(v).ok())
         .collect();
     let n_prior = prior.len();
-    let history: Arc<Mutex<Vec<Message>>> = Arc::new(Mutex::new(prior.clone()));
 
-    let mut app = App::new(id.clone());
+    let api_history: Arc<Mutex<Vec<Message>>> = Arc::new(Mutex::new(prior.clone()));
 
-    // Replay prior messages into the chat view (push directly to avoid per-message scroll)
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| ".".to_string());
+
+    let mut app = App::new(id.clone(), cwd, Arc::clone(&api_history));
+
+    // Replay prior messages into the chat view.
     for msg in messages_to_chat(&prior) {
         app.messages.push(msg);
     }
@@ -57,10 +63,6 @@ pub fn main(session_id: Option<String>) {
             message_type: MessageType::System,
         });
     }
-
-    let cwd = std::env::current_dir()
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| ".".to_string());
 
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -82,6 +84,11 @@ pub fn main(session_id: Option<String>) {
                 let action = handle_event(&mut app, ev);
                 match action {
                     AppAction::Quit => break,
+
+                    AppAction::Cancel => {
+                        app.cancel_agent();
+                    }
+
                     AppAction::Submit(text) => {
                         app.push_message(ChatMessage {
                             role: "user".into(),
@@ -98,9 +105,9 @@ pub fn main(session_id: Option<String>) {
                         let (tx, rx) = mpsc::channel(256);
                         app.start_stream(rx);
 
-                        let hist = Arc::clone(&history);
-                        let cwd_clone = cwd.clone();
-                        tokio::spawn(async move {
+                        let hist = Arc::clone(&app.api_history);
+                        let cwd_clone = app.cwd.clone();
+                        let handle = tokio::spawn(async move {
                             crate::agent::agent_turn_streaming(
                                 &text,
                                 hist,
@@ -110,7 +117,47 @@ pub fn main(session_id: Option<String>) {
                             )
                             .await;
                         });
+                        app.agent_handle = Some(handle);
                     }
+
+                    AppAction::Command(text) => {
+                        if commands::execute(&text, &mut app) {
+                            break;
+                        }
+                    }
+
+                    AppAction::CopyLast => {
+                        let text = app
+                            .messages
+                            .iter()
+                            .rev()
+                            .find(|m| m.message_type == MessageType::Assistant)
+                            .map(|m| m.content.clone());
+                        match text {
+                            None => app.push_message(ChatMessage {
+                                role: "error".into(),
+                                content: "No assistant message to copy.".into(),
+                                message_type: MessageType::Error,
+                            }),
+                            Some(t) => {
+                                let ok = commands::clipboard_write(&t);
+                                app.push_message(ChatMessage {
+                                    role: "system".into(),
+                                    content: if ok {
+                                        "Copied to clipboard.".into()
+                                    } else {
+                                        "Clipboard unavailable.".into()
+                                    },
+                                    message_type: if ok {
+                                        MessageType::System
+                                    } else {
+                                        MessageType::Error
+                                    },
+                                });
+                            }
+                        }
+                    }
+
                     AppAction::ScrollUp => app.scroll_up(),
                     AppAction::ScrollDown => app.scroll_down(),
                     _ => {}
@@ -218,9 +265,11 @@ fn drain_stream(app: &mut App) {
             StreamEvent::Done(status) => {
                 app.status.tokens_in += status.tokens_in;
                 app.status.tokens_out += status.tokens_out;
+                app.status.model = status.model;
                 app.status.turn += 1;
                 app.is_waiting = false;
                 app.stream_rx = None;
+                app.agent_handle = None;
                 break;
             }
             StreamEvent::Error(e) => {
@@ -231,6 +280,7 @@ fn drain_stream(app: &mut App) {
                 });
                 app.is_waiting = false;
                 app.stream_rx = None;
+                app.agent_handle = None;
                 break;
             }
         }

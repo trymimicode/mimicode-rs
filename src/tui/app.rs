@@ -8,8 +8,8 @@ use crate::types::Message;
 #[derive(Debug)]
 pub enum StreamEvent {
     Token(String),
-    ToolCallStart(String),
-    ToolCallResult(String, String),
+    ToolCallStart(String, String), // (name, args_summary)
+    ToolCallResult(String, String), // (name, output)
     Done(StatusInfo),
     Error(String),
 }
@@ -60,6 +60,9 @@ pub struct App {
     pub autocomplete_index: Option<usize>,
     // Handle for the running agent task (for cancellation).
     pub agent_handle: Option<JoinHandle<()>>,
+    // Live tool activity display (above input box).
+    pub tool_status: Option<String>,  // "⚙ bash  ls -la ."
+    pub tool_result: Option<String>,  // first line of last result
 }
 
 impl App {
@@ -86,6 +89,8 @@ impl App {
             history_draft: String::new(),
             autocomplete_index: None,
             agent_handle: None,
+            tool_status: None,
+            tool_result: None,
         }
     }
 

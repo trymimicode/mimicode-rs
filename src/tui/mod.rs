@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use crossterm::{
     event,
+    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -30,7 +31,7 @@ pub(super) fn generate_session_id() -> String {
 
 fn cleanup() {
     let _ = disable_raw_mode();
-    let _ = execute!(stdout(), LeaveAlternateScreen);
+    let _ = execute!(stdout(), DisableMouseCapture, LeaveAlternateScreen);
 }
 
 pub fn main(session_id: Option<String>) {
@@ -71,7 +72,8 @@ pub fn main(session_id: Option<String>) {
     }));
 
     enable_raw_mode().expect("failed to enable raw mode");
-    execute!(stdout(), EnterAlternateScreen).expect("failed to enter alternate screen");
+    execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)
+        .expect("failed to enter alternate screen");
     let backend = CrosstermBackend::new(stdout());
     let mut terminal = Terminal::new(backend).expect("failed to create terminal");
 
@@ -90,6 +92,8 @@ pub fn main(session_id: Option<String>) {
                     }
 
                     AppAction::Submit(text) => {
+                        app.tool_status = None;
+                        app.tool_result = None;
                         app.push_message(ChatMessage {
                             role: "user".into(),
                             content: text.clone(),
@@ -247,15 +251,28 @@ fn drain_stream(app: &mut App) {
                     msg.content.push_str(&chunk);
                 }
             }
-            StreamEvent::ToolCallStart(name) => {
+            StreamEvent::ToolCallStart(name, args) => {
+                let label = if args.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{name}  {args}")
+                };
+                app.tool_status = Some(label.clone());
+                app.tool_result = None;
                 app.push_message(ChatMessage {
                     role: "tool".into(),
-                    content: format!("▶ {name}"),
+                    content: format!("▶ {label}"),
                     message_type: MessageType::ToolCall,
                 });
             }
             StreamEvent::ToolCallResult(name, output) => {
-                let preview = output.lines().take(3).collect::<Vec<_>>().join(" | ");
+                let first = output.lines().next().unwrap_or("").trim();
+                let preview = if first.len() > 70 {
+                    format!("{}…", &first[..67])
+                } else {
+                    first.to_string()
+                };
+                app.tool_result = Some(preview.clone());
                 app.push_message(ChatMessage {
                     role: "tool".into(),
                     content: format!("{name}: {preview}"),

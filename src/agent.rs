@@ -373,7 +373,7 @@ pub async fn agent_turn_streaming(
 
         let mut result_blocks = Vec::new();
         for (id, name, input) in tool_uses {
-            let _ = tx.send(StreamEvent::ToolCallStart(name.clone())).await;
+            let _ = tx.send(StreamEvent::ToolCallStart(name.clone(), tool_args(&name, &input))).await;
             let result = dispatch(&name, &input, cwd, "").await;
             let _ = tx.send(StreamEvent::ToolCallResult(name.clone(), result.output.clone())).await;
             result_blocks.push(ContentBlock::ToolResult {
@@ -416,6 +416,20 @@ fn split_content(content: &MessageContent) -> (Vec<String>, Vec<(String, String,
             (texts, tools)
         }
         MessageContent::Text(t) => (vec![t.clone()], vec![]),
+    }
+}
+
+fn tool_args(name: &str, input: &Value) -> String {
+    let raw = match name {
+        "bash" => input["cmd"].as_str().unwrap_or(""),
+        "read" | "write" | "edit" => input["path"].as_str().unwrap_or(""),
+        _ => "",
+    };
+    let raw = raw.trim();
+    if raw.len() > 60 {
+        format!("{}…", &raw[..57])
+    } else {
+        raw.to_string()
     }
 }
 

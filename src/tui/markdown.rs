@@ -31,8 +31,8 @@ struct Ctx {
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
-const BORDER: Style = Style::new().fg(Color::DarkGray);
-const CODE_FG: Style = Style::new().fg(Color::Yellow);
+fn border_style() -> Style { Style::default().fg(Color::DarkGray) }
+fn code_style()   -> Style { Style::default().fg(Color::Yellow) }
 
 fn heading_style(level: HeadingLevel) -> Style {
     let base = Style::default().add_modifier(Modifier::BOLD);
@@ -74,7 +74,7 @@ impl Ctx {
         if self.blockquote > 0 && self.spans.is_empty() {
             self.spans.push(Span::styled(
                 "│ ".repeat(self.blockquote as usize),
-                BORDER,
+                border_style(),
             ));
         }
     }
@@ -88,7 +88,7 @@ impl Ctx {
             } else {
                 format!("{}•  ", indent)
             };
-            self.spans.push(Span::styled(marker, BORDER));
+            self.spans.push(Span::styled(marker, border_style()));
             self.item_prefix_done = true;
         }
     }
@@ -107,7 +107,7 @@ impl Ctx {
                 }
             }
             Event::Rule => {
-                self.lines.push(Line::from(Span::styled("─".repeat(48), BORDER)));
+                self.lines.push(Line::from(Span::styled("─".repeat(48), border_style())));
                 self.blank();
             }
             _ => {}
@@ -176,14 +176,14 @@ impl Ctx {
                 } else {
                     format!(" ┌─ {} ", lang)
                 };
-                self.lines.push(Line::from(Span::styled(header, BORDER)));
+                self.lines.push(Line::from(Span::styled(header, border_style())));
                 for line in self.code_buf.trim_end_matches('\n').lines() {
                     self.lines.push(Line::from(vec![
-                        Span::styled(" │ ", BORDER),
-                        Span::styled(line.to_string(), CODE_FG),
+                        Span::styled(" │ ", border_style()),
+                        Span::styled(line.to_string(), code_style()),
                     ]));
                 }
-                self.lines.push(Line::from(Span::styled(" └─", BORDER)));
+                self.lines.push(Line::from(Span::styled(" └─", border_style())));
                 self.blank();
                 self.code_block = false;
                 self.code_buf.clear();

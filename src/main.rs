@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use std::io::Write;
 
 use anyhow::Result;

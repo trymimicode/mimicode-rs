@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 
 use crate::tui::app::{App, ChatMessage, MessageType};
 use crate::tui::commands;
@@ -35,19 +35,29 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     frame.render_widget(Paragraph::new(header), chunks[0]);
 
     // ── Message area ─────────────────────────────────────────────────────────
+    let inner_width = chunks[1].width.saturating_sub(2) as usize;
     let all_lines: Vec<Line<'static>> = app.messages.iter().flat_map(message_lines).collect();
-    let total = all_lines.len();
+
+    // Estimate total visual lines after word-wrap for accurate scroll clamping.
+    let total: usize = if inner_width > 0 {
+        all_lines.iter().map(|l| {
+            let chars: usize = l.spans.iter().map(|s| s.content.chars().count()).sum();
+            if chars == 0 { 1 } else { (chars + inner_width - 1) / inner_width }
+        }).sum()
+    } else {
+        all_lines.len()
+    };
     let visible_height = chunks[1].height.saturating_sub(2) as usize;
     let max_offset = total.saturating_sub(visible_height);
 
     app.total_lines = total;
     app.scroll_offset = app.scroll_offset.min(max_offset);
 
-    let offset = app.scroll_offset;
-    let visible: Vec<Line<'static>> = all_lines.into_iter().skip(offset).collect();
-
     frame.render_widget(
-        Paragraph::new(visible).block(Block::default().borders(Borders::ALL)),
+        Paragraph::new(all_lines)
+            .block(Block::default().borders(Borders::ALL))
+            .wrap(Wrap { trim: false })
+            .scroll((app.scroll_offset as u16, 0)),
         chunks[1],
     );
 
@@ -57,12 +67,28 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     let status_text = app.tool_status.as_deref().unwrap_or("");
     let result_text = app.tool_result.as_deref().unwrap_or("");
 
+    let spinner_char = if app.is_waiting {
+        const FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let tick = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            / 100;
+        FRAMES[(tick as usize) % FRAMES.len()]
+    } else {
+        ' '
+    };
+
     let activity_lines: Vec<Line<'static>> = vec![
         Line::from(Span::styled(
             if status_text.is_empty() {
-                String::new()
+                if app.is_waiting {
+                    format!(" {} ", spinner_char)
+                } else {
+                    String::new()
+                }
             } else {
-                format!(" ⚙ {}", status_text)
+                format!(" {} {}", spinner_char, status_text)
             },
             Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM),
         )),
@@ -148,20 +174,9 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
 
     // ── Status bar ───────────────────────────────────────────────────────────
     let s = &app.status;
-    let spinner = if app.is_waiting {
-        const FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-        let tick = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-            / 100;
-        format!("  {}", FRAMES[(tick as usize) % FRAMES.len()])
-    } else {
-        String::new()
-    };
     let status_line = format!(
-        " {} | {} | turn {} | in {} out {}{}",
-        s.session_id, s.model, s.turn, s.tokens_in, s.tokens_out, spinner,
+        " {} | {} | turn {} | in {} out {}",
+        s.session_id, s.model, s.turn, s.tokens_in, s.tokens_out,
     );
     frame.render_widget(
         Paragraph::new(status_line).style(Style::default().fg(Color::DarkGray)),

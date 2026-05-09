@@ -251,6 +251,9 @@ fn drain_stream(app: &mut App) {
                 {
                     msg.content.push_str(&chunk);
                 }
+                if app.tool_status.is_none() {
+                    app.tool_status = Some("generating…".to_string());
+                }
             }
             StreamEvent::ToolCallStart(name, args) => {
                 let label = if args.is_empty() {
@@ -288,6 +291,8 @@ fn drain_stream(app: &mut App) {
                 app.is_waiting = false;
                 app.stream_rx = None;
                 app.agent_handle = None;
+                app.tool_status = None;
+                app.tool_result = None;
                 break;
             }
             StreamEvent::Error(e) => {

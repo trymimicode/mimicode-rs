@@ -84,7 +84,7 @@ pub fn handle_event(app: &mut App, event: Event) -> AppAction {
             AppAction::None
         }
 
-        // Up: navigate autocomplete (if visible) or history.
+        // Up: navigate autocomplete (if visible), scroll chat if input empty, else history.
         KeyCode::Up => {
             if has_completions {
                 let len = completions.len();
@@ -93,13 +93,16 @@ pub fn handle_event(app: &mut App, event: Event) -> AppAction {
                     Some(i) => i - 1,
                 };
                 app.autocomplete_index = Some(next);
+                AppAction::None
+            } else if app.input.is_empty() {
+                AppAction::ScrollUp
             } else {
                 app.history_prev();
+                AppAction::None
             }
-            AppAction::None
         }
 
-        // Down: navigate autocomplete (if visible) or history.
+        // Down: navigate autocomplete (if visible), scroll chat if input empty, else history.
         KeyCode::Down => {
             if has_completions {
                 let len = completions.len();
@@ -108,10 +111,13 @@ pub fn handle_event(app: &mut App, event: Event) -> AppAction {
                     Some(i) => (i + 1) % len,
                 };
                 app.autocomplete_index = Some(next);
+                AppAction::None
+            } else if app.input.is_empty() {
+                AppAction::ScrollDown
             } else {
                 app.history_next();
+                AppAction::None
             }
-            AppAction::None
         }
 
         KeyCode::Esc => {

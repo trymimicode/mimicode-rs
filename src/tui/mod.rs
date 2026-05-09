@@ -251,6 +251,8 @@ fn drain_stream(app: &mut App) {
                 {
                     msg.content.push_str(&chunk);
                 }
+                // Keep the view pinned to the bottom while the response streams in.
+                app.scroll_offset = usize::MAX;
                 if app.tool_status.is_none() {
                     app.tool_status = Some("generating…".to_string());
                 }

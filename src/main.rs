@@ -1,14 +1,19 @@
-
+use std::io::Write;
 
 use anyhow::Result;
 use clap::Parser;
 
 mod agent;
+mod logger;
+mod mimi_memory;
 mod providers;
+mod router;
+mod session;
 mod tools;
+mod tui;
 mod types;
 
-const SYSTEM: &str = "You are a coding agent in a minimal harness called mimicode.
+pub const SYSTEM: &str = "You are a coding agent in a minimal harness called mimicode.
 You have four tools: read, bash, edit, write. Use them deliberately.
 
 SEARCH RULES (non-negotiable):
@@ -60,9 +65,13 @@ STYLE:
 #[derive(Parser)]
 #[command(name = "mimicode", about = "A minimal CLI coding agent")]
 struct Cli {
-    /// Optional session name (reserved for future persistence)
+    /// Optional session name
     #[arg(short, long)]
     session: Option<String>,
+
+    /// Launch the TUI instead of the line-oriented CLI
+    #[arg(long)]
+    tui: bool,
 
     /// Prompt to send; omit to enter interactive mode
     prompt: Option<String>,
@@ -71,5 +80,68 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    agent::run(SYSTEM, cli.prompt).await
+
+    if cli.tui {
+        tui::main(cli.session);
+        return Ok(());
+    }
+
+    let prompt = cli.prompt.unwrap_or_default();
+    let sess = logger::start_session(cli.session.as_deref());
+    let cwd = std::env::current_dir().unwrap().to_string_lossy().to_string();
+
+    logger::log("session_start", serde_json::json!({
+        "cwd": cwd,
+        "prompt_chars": prompt.len(),
+        "mode": if prompt.is_empty() { "repl" } else { "one_shot" },
+        "requested_id": cli.session
+    }));
+    eprintln!("[mimicode] session {} -> {}", sess.id, sess.path.display());
+
+    if !prompt.is_empty() {
+        let mut messages = session::load_messages(&sess.path);
+        if !messages.is_empty() {
+            eprintln!("[mimicode] resumed {} prior messages", messages.len());
+        }
+        agent::agent_turn(&prompt, &mut messages, &cwd, 25, &sess.id, None).await?;
+        session::save_messages(&sess.path, &messages);
+        let text = session::last_assistant_text(&messages);
+        if !text.is_empty() {
+            println!("{text}");
+        }
+    } else {
+        let mut messages = session::load_messages(&sess.path);
+        if !messages.is_empty() {
+            eprintln!("[mimicode] resumed {} prior messages", messages.len());
+        }
+        eprintln!("[mimicode] REPL. empty line or :q / ctrl-d to exit.");
+
+        loop {
+            print!("> ");
+            std::io::stdout().flush().unwrap();
+
+            let mut input = String::new();
+            match std::io::stdin().read_line(&mut input) {
+                Ok(0) => break,
+                Err(_) => break,
+                Ok(_) => {}
+            }
+
+            let prompt = input.trim().to_string();
+
+            if prompt.is_empty() || matches!(prompt.as_str(), ":q" | ":quit" | ":exit") {
+                break;
+            }
+
+            agent::agent_turn(&prompt, &mut messages, &cwd, 25, &sess.id, None).await?;
+            session::save_messages(&sess.path, &messages);
+            let text = session::last_assistant_text(&messages);
+            if !text.is_empty() {
+                println!("{text}");
+            }
+            println!();
+        }
+    }
+
+    Ok(())
 }

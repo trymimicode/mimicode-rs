@@ -1,5 +1,6 @@
 pub mod bash;
 pub mod read;
+pub mod write;
 
 use std::path::PathBuf;
 use std::sync::Arc;

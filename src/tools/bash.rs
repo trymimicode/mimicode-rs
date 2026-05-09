@@ -1,6 +1,10 @@
 use std::sync::LazyLock;
+use std::time::Duration;
 
 use regex::Regex;
+use tokio::io::AsyncReadExt;
+
+use super::ToolResult;
 
 static BANNED: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     vec![
@@ -31,6 +35,12 @@ static BANNED: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     ]
 });
 
+static ANSI: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07").unwrap()
+});
+
+const TAIL_BYTES: usize = 100_000;
+
 pub fn vet(cmd: &str) -> Option<String> {
     BANNED
         .iter()
@@ -38,10 +48,96 @@ pub fn vet(cmd: &str) -> Option<String> {
         .map(|(_, reason)| reason.to_string())
 }
 
+pub(crate) async fn bash(cmd: &str, cwd: &str, timeout: Option<f64>) -> ToolResult {
+    if let Some(hint) = vet(cmd) {
+        return ToolResult::err(format!("[blocked] {hint}"));
+    }
 
-// only guarantee the vet guard actually works. These aren't throwaway scaffolding; they're the spec encoded as runnable assertions. If someone tweaks a regex
-// later, the tests are what catches a regression before a rm -rf / gets through.
+    #[cfg(windows)]
+    let spawn_result = tokio::process::Command::new("cmd")
+        .args(["/C", cmd])
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
 
+    #[cfg(not(windows))]
+    let spawn_result = tokio::process::Command::new("sh")
+        .args(["-c", cmd])
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+
+    let mut child = match spawn_result {
+        Ok(c) => c,
+        Err(e) => return ToolResult::err(format!("failed to spawn: {e}")),
+    };
+
+    let mut stdout = child.stdout.take().expect("stdout piped");
+    let mut stderr = child.stderr.take().expect("stderr piped");
+
+    let stdout_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        stdout.read_to_end(&mut buf).await.map(|_| buf)
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        stderr.read_to_end(&mut buf).await.map(|_| buf)
+    });
+
+    let (timed_out, exit_code): (bool, Option<i32>) = if let Some(secs) = timeout {
+        tokio::select! {
+            status = child.wait() => {
+                (false, status.ok().and_then(|s| s.code()))
+            }
+            _ = tokio::time::sleep(Duration::from_secs_f64(secs)) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                (true, None)
+            }
+        }
+    } else {
+        let code = child.wait().await.ok().and_then(|s| s.code());
+        (false, code)
+    };
+
+    let stdout_bytes = stdout_task.await.ok().and_then(|r| r.ok()).unwrap_or_default();
+    let stderr_bytes = stderr_task.await.ok().and_then(|r| r.ok()).unwrap_or_default();
+    let mut combined = stdout_bytes;
+    combined.extend_from_slice(&stderr_bytes);
+
+    let raw = String::from_utf8_lossy(&combined);
+    let stripped = ANSI.replace_all(&raw, "");
+    let mut output = stripped.replace("\r\n", "\n").replace('\r', "\n");
+
+    let mut truncated = false;
+    if output.len() > TAIL_BYTES {
+        let drop_to = output.len() - TAIL_BYTES;
+        // advance to a UTF-8 char boundary
+        let mut start = drop_to;
+        while start < output.len() && (output.as_bytes()[start] & 0xC0) == 0x80 {
+            start += 1;
+        }
+        let tail = output[start..].to_string();
+        output = format!("[... truncated {start} bytes; showing last {TAIL_BYTES} ...]\n{tail}");
+        truncated = true;
+    }
+
+    let is_error = timed_out || exit_code.map_or(false, |c| c != 0);
+
+    if is_error && output.trim().is_empty() {
+        output = if timed_out {
+            format!("[timeout after {}s, no output]", timeout.unwrap_or(0.0))
+        } else {
+            format!("[exit {}, no output]", exit_code.unwrap_or(-1))
+        };
+    }
+
+    ToolResult { output, is_error, truncated, timed_out, diff_info: None }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

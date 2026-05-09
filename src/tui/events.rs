@@ -1,4 +1,4 @@
-use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 
 use super::app::App;
 
@@ -15,6 +15,15 @@ pub enum AppAction {
 }
 
 pub fn handle_event(app: &mut App, event: Event) -> AppAction {
+    // Mouse scroll wheel.
+    if let Event::Mouse(mouse) = event {
+        return match mouse.kind {
+            MouseEventKind::ScrollUp => AppAction::ScrollUp,
+            MouseEventKind::ScrollDown => AppAction::ScrollDown,
+            _ => AppAction::None,
+        };
+    }
+
     let Event::Key(key) = event else {
         return AppAction::None;
     };
@@ -45,13 +54,9 @@ pub fn handle_event(app: &mut App, event: Event) -> AppAction {
         return AppAction::CopyLast;
     }
 
-    // While waiting, only scrolling is allowed.
+    // While waiting, keyboard input is blocked (mouse scroll still works above).
     if app.is_waiting {
-        return match key.code {
-            KeyCode::PageUp => AppAction::ScrollUp,
-            KeyCode::PageDown => AppAction::ScrollDown,
-            _ => AppAction::None,
-        };
+        return AppAction::None;
     }
 
     let completions = app.current_completions();
@@ -127,9 +132,6 @@ pub fn handle_event(app: &mut App, event: Event) -> AppAction {
             }
             AppAction::None
         }
-
-        KeyCode::PageUp => AppAction::ScrollUp,
-        KeyCode::PageDown => AppAction::ScrollDown,
 
         KeyCode::Char(c) => {
             app.input.push(c);

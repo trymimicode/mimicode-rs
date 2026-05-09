@@ -6,8 +6,8 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use crate::tui::app::{App, ChatMessage, MessageType};
 use crate::tui::commands;
 
-const HINT: &str =
-    " Enter: send  ↑↓: history  Tab: complete  PgUp/Dn: scroll  Ctrl+C: cancel  Ctrl+D: quit  Ctrl+Y: copy";
+// Only non-obvious shortcuts live here.
+const HEADER_HINTS: &str = "Ctrl+C: cancel · Ctrl+D: quit · Ctrl+Y: copy · /help";
 
 pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     let area = frame.area();
@@ -15,17 +15,28 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(0),
-            Constraint::Length(1), // info row: activity or key hints
-            Constraint::Length(3), // border + input line + border
+            Constraint::Length(1), // header: title + hints
+            Constraint::Min(0),    // message area
+            Constraint::Length(2), // activity: tool call + └─ result
+            Constraint::Length(3), // input box
             Constraint::Length(1), // status bar
         ])
         .split(area);
 
-    // ── Message list ─────────────────────────────────────────────────────────
+    // ── Header ───────────────────────────────────────────────────────────────
+    let header = Line::from(vec![
+        Span::styled(" mimicode", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            format!("    {}", HEADER_HINTS),
+            Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(header), chunks[0]);
+
+    // ── Message area ─────────────────────────────────────────────────────────
     let all_lines: Vec<Line<'static>> = app.messages.iter().flat_map(message_lines).collect();
     let total = all_lines.len();
-    let visible_height = chunks[0].height.saturating_sub(2) as usize;
+    let visible_height = chunks[1].height.saturating_sub(2) as usize;
     let max_offset = total.saturating_sub(visible_height);
 
     app.total_lines = total;
@@ -34,51 +45,46 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     let offset = app.scroll_offset;
     let visible: Vec<Line<'static>> = all_lines.into_iter().skip(offset).collect();
 
-    let msg_title = if offset > 0 {
-        "mimicode [↑ PgUp/PgDn to scroll]"
-    } else {
-        "mimicode"
-    };
     frame.render_widget(
-        Paragraph::new(visible)
-            .block(Block::default().borders(Borders::ALL).title(msg_title)),
-        chunks[0],
+        Paragraph::new(visible).block(Block::default().borders(Borders::ALL)),
+        chunks[1],
     );
 
-    // ── Info row (above input) ────────────────────────────────────────────────
-    // While waiting: show active tool or "waiting…". Otherwise: key hints.
-    let info_line = if app.is_waiting {
-        let activity = app
-            .messages
-            .iter()
-            .rev()
-            .find(|m| m.message_type == MessageType::ToolCall)
-            .map(|m| format!(" ⚙ {}  (Ctrl+C to cancel)", m.content.trim_start_matches('▶').trim()))
-            .unwrap_or_else(|| " ⚙ waiting…  (Ctrl+C to cancel)".into());
+    // ── Activity area (above input) ───────────────────────────────────────────
+    // Line 1: current or last tool call.
+    // Line 2: └─ first line of result, indented to connect visually.
+    let status_text = app.tool_status.as_deref().unwrap_or("");
+    let result_text = app.tool_result.as_deref().unwrap_or("");
+
+    let activity_lines: Vec<Line<'static>> = vec![
         Line::from(Span::styled(
-            activity,
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::DIM),
-        ))
-    } else {
+            if status_text.is_empty() {
+                String::new()
+            } else {
+                format!(" ⚙ {}", status_text)
+            },
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM),
+        )),
         Line::from(Span::styled(
-            HINT,
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
-        ))
-    };
-    frame.render_widget(Paragraph::new(info_line), chunks[1]);
+            if result_text.is_empty() {
+                String::new()
+            } else {
+                format!("   └─ {}", result_text)
+            },
+            Style::default().fg(Color::Green).add_modifier(Modifier::DIM),
+        )),
+    ];
+    frame.render_widget(Paragraph::new(activity_lines), chunks[2]);
 
     // ── Autocomplete overlay ──────────────────────────────────────────────────
     if app.input.starts_with('/') {
         let completions = commands::completions(&app.input);
         if !completions.is_empty() {
-            let comp_h = (completions.len() as u16 + 2).min(chunks[0].height);
+            let comp_h = (completions.len() as u16 + 2).min(chunks[1].height);
             let comp_w = 54_u16.min(area.width);
-            let comp_y = chunks[2]
-                .y
-                .saturating_sub(comp_h)
-                .max(chunks[0].y);
+            let comp_y = chunks[3].y.saturating_sub(comp_h).max(chunks[1].y);
             let comp_rect = Rect {
-                x: chunks[2].x,
+                x: chunks[3].x,
                 y: comp_y,
                 width: comp_w,
                 height: comp_h,
@@ -123,21 +129,20 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
         (Color::Blue, Line::from(app.input.clone()))
     };
 
-    let input_block = Block::default()
-        .borders(Borders::ALL)
-        .title("input")
-        .border_style(Style::default().fg(border_color));
-
     frame.render_widget(
-        Paragraph::new(Text::from(vec![input_line])).block(input_block),
-        chunks[2],
+        Paragraph::new(Text::from(vec![input_line])).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color)),
+        ),
+        chunks[3],
     );
 
-    // Cursor sits on the input line; hidden while waiting.
+    // Cursor on the input line; hidden while waiting.
     if !app.is_waiting {
-        let inner_width = chunks[2].width.saturating_sub(2);
+        let inner_width = chunks[3].width.saturating_sub(2);
         let col = (app.input.len() as u16).min(inner_width.saturating_sub(1));
-        frame.set_cursor_position((chunks[2].x + 1 + col, chunks[2].y + 1));
+        frame.set_cursor_position((chunks[3].x + 1 + col, chunks[3].y + 1));
     }
 
     // ── Status bar ───────────────────────────────────────────────────────────
@@ -148,7 +153,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     );
     frame.render_widget(
         Paragraph::new(status_line).style(Style::default().fg(Color::DarkGray)),
-        chunks[3],
+        chunks[4],
     );
 }
 
@@ -195,6 +200,6 @@ fn message_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
             .collect()
     };
 
-    lines.push(Line::default()); // blank separator between messages
+    lines.push(Line::default()); // blank separator
     lines
 }

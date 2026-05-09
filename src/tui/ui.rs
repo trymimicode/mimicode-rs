@@ -6,6 +6,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use crate::tui::app::{App, ChatMessage, MessageType};
 use crate::tui::commands;
 use crate::tui::markdown;
+use crate::tui::splash;
 
 // Only non-obvious shortcuts live here.
 const HEADER_HINTS: &str = "Ctrl+C: cancel · Ctrl+D: quit · Ctrl+Y: copy · /help";
@@ -23,6 +24,18 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
             Constraint::Length(1), // status bar
         ])
         .split(area);
+
+    if splash::draw(frame, area, chunks[0], &mut app.intro) {
+        // Input widget is not drawn during the intro; park the caret out of the way.
+        let cx = area
+            .x
+            .saturating_add(area.width.saturating_sub(1));
+        let cy = area
+            .y
+            .saturating_add(area.height.saturating_sub(1));
+        frame.set_cursor_position((cx, cy));
+        return;
+    }
 
     // ── Header ───────────────────────────────────────────────────────────────
     let header = Line::from(vec![

@@ -15,6 +15,19 @@ pub enum AppAction {
 }
 
 pub fn handle_event(app: &mut App, event: Event) -> AppAction {
+    if app.intro.is_playing() {
+        if let Event::Key(key) = &event {
+            if key.kind == KeyEventKind::Press {
+                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                if ctrl && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('d')) {
+                    return AppAction::Quit;
+                }
+                app.intro.skip();
+            }
+        }
+        return AppAction::None;
+    }
+
     // Mouse scroll wheel.
     if let Event::Mouse(mouse) = event {
         return match mouse.kind {

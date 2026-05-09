@@ -5,6 +5,8 @@ use tokio::task::JoinHandle;
 
 use crate::types::Message;
 
+use super::splash::IntroState;
+
 #[derive(Debug)]
 pub enum StreamEvent {
     Token(String),
@@ -63,6 +65,8 @@ pub struct App {
     // Live tool activity display (above input box).
     pub tool_status: Option<String>,  // "⚙ bash  ls -la ."
     pub tool_result: Option<String>,  // first line of last result
+    /// Startup intro animation (skipped on any key once the TUI is ready).
+    pub intro: IntroState,
 }
 
 impl App {
@@ -91,6 +95,7 @@ impl App {
             agent_handle: None,
             tool_status: None,
             tool_result: None,
+            intro: IntroState::new_playing(),
         }
     }
 

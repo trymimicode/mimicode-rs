@@ -1,31 +1,121 @@
 use std::io::{self, BufRead, Write};
 
 use anyhow::Result;
+use serde_json::Value;
 
 use crate::providers::call_claude;
+use crate::tools::edit::{edit, EditOp};
+use crate::tools::{ToolResult, bash::bash, read::read, write::write};
 use crate::types::{ContentBlock, Message, MessageContent};
 
 const MODEL: &str = "claude-haiku-4-5-20251001";
+const MAX_STEPS: usize = 25;
 
 pub async fn agent_turn(
     user_msg: &str,
     history: &mut Vec<Message>,
     system: &str,
+    cwd: &str,
 ) -> Result<String> {
     history.push(Message { role: "user".into(), content: MessageContent::Text(user_msg.into()) });
 
-    let reply = call_claude(history, system, MODEL).await?;
-    let text = extract_text(&reply);
-    history.push(reply);
+    for _ in 0..MAX_STEPS {
+        let reply = call_claude(history, system, MODEL).await?;
 
-    Ok(text)
+        let tool_uses: Vec<(String, String, Value)> = match &reply.content {
+            MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .filter_map(|b| {
+                    if let ContentBlock::ToolUse { id, name, input } = b {
+                        Some((id.clone(), name.clone(), input.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            _ => vec![],
+        };
+
+        history.push(reply);
+
+        if tool_uses.is_empty() {
+            return Ok(extract_text(history.last().unwrap()));
+        }
+
+        let mut result_blocks = Vec::new();
+        for (id, name, input) in tool_uses {
+            let result = dispatch(&name, &input, cwd).await;
+            result_blocks.push(ContentBlock::ToolResult {
+                tool_use_id: id,
+                content: result.output,
+                is_error: result.is_error,
+            });
+        }
+
+        history.push(Message {
+            role: "user".into(),
+            content: MessageContent::Blocks(result_blocks),
+        });
+    }
+
+    anyhow::bail!("reached {MAX_STEPS}-step limit without a final response")
+}
+
+async fn dispatch(name: &str, input: &Value, cwd: &str) -> ToolResult {
+    match name {
+        "bash" => {
+            let Some(cmd) = input.get("cmd").and_then(|v| v.as_str()) else {
+                return ToolResult::err("[error] missing required argument: cmd".to_string());
+            };
+            let timeout = input.get("timeout").and_then(|v| v.as_f64());
+            bash(cmd, cwd, timeout).await
+        }
+
+        "read" => {
+            let Some(path) = input.get("path").and_then(|v| v.as_str()) else {
+                return ToolResult::err("[error] missing required argument: path".to_string());
+            };
+            let offset = input.get("offset").and_then(|v| v.as_u64()).map(|n| n as usize).unwrap_or(1);
+            let limit = input.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize);
+            read(path, cwd, offset, limit).await
+        }
+
+        "write" => {
+            let Some(path) = input.get("path").and_then(|v| v.as_str()) else {
+                return ToolResult::err("[error] missing required argument: path".to_string());
+            };
+            let Some(content) = input.get("content").and_then(|v| v.as_str()) else {
+                return ToolResult::err("[error] missing required argument: content".to_string());
+            };
+            write(path, content, cwd).await
+        }
+
+        "edit" => {
+            let Some(path) = input.get("path").and_then(|v| v.as_str()) else {
+                return ToolResult::err("[error] missing required argument: path".to_string());
+            };
+            let old_text = input.get("old_text").and_then(|v| v.as_str());
+            let new_text = input.get("new_text").and_then(|v| v.as_str());
+            let edits = input.get("edits").and_then(|v| v.as_array()).map(|arr| {
+                arr.iter()
+                    .filter_map(|e| serde_json::from_value::<EditOp>(e.clone()).ok())
+                    .collect::<Vec<_>>()
+            });
+            edit(path, cwd, old_text, new_text, edits).await
+        }
+
+        other => ToolResult::err(format!("[error] unknown tool: {other}")),
+    }
 }
 
 pub async fn run(system: &str, prompt: Option<String>) -> Result<()> {
     let mut history: Vec<Message> = Vec::new();
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| ".".to_string());
 
     if let Some(text) = prompt {
-        let reply = agent_turn(&text, &mut history, system).await?;
+        let reply = agent_turn(&text, &mut history, system, &cwd).await?;
         println!("{}", reply);
         return Ok(());
     }
@@ -41,7 +131,7 @@ pub async fn run(system: &str, prompt: Option<String>) -> Result<()> {
             break;
         }
 
-        let reply = agent_turn(trimmed, &mut history, system).await?;
+        let reply = agent_turn(trimmed, &mut history, system, &cwd).await?;
         println!("\n{}\n", reply);
     }
 

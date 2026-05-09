@@ -5,7 +5,8 @@ use tokio::sync::Mutex;
 
 use super::{DiffInfo, ToolResult, FILE_LOCKS};
 
-pub struct EditOp {
+#[derive(serde::Deserialize)]
+pub(crate) struct EditOp {
     pub old_text: String,
     pub new_text: String,
 }

@@ -14,6 +14,8 @@ pub enum ContentBlock {
     ToolResult {
         tool_use_id: String,
         content: String,
+        #[serde(default)]
+        is_error: bool,
     },
 }
 

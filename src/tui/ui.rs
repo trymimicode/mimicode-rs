@@ -1,12 +1,13 @@
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::tui::app::{App, ChatMessage, MessageType};
+use crate::tui::commands;
 
 const HINT: &str =
-    "Enter: send  Esc: clear  Ctrl+D: exit  j/k or PgDn/PgUp: scroll";
+    "Enter: send  ↑↓: history  Tab: complete  PgUp/Dn: scroll  Ctrl+C: cancel  Ctrl+D: quit  Ctrl+Y: copy";
 
 pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     let area = frame.area();
@@ -33,14 +34,58 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     let visible: Vec<Line<'static>> = all_lines.into_iter().skip(offset).collect();
 
     let msg_title = if offset > 0 {
-        "mimicode [↑ scroll to see more]"
+        "mimicode [↑ PgUp/PgDn to scroll]"
     } else {
         "mimicode"
     };
     frame.render_widget(
-        Paragraph::new(visible).block(Block::default().borders(Borders::ALL).title(msg_title)),
+        Paragraph::new(visible)
+            .block(Block::default().borders(Borders::ALL).title(msg_title)),
         chunks[0],
     );
+
+    // ── Autocomplete overlay ──────────────────────────────────────────────────
+    if app.input.starts_with('/') {
+        let completions = commands::completions(&app.input);
+        if !completions.is_empty() {
+            let comp_h = (completions.len() as u16 + 2).min(chunks[0].height);
+            let comp_w = 54_u16.min(area.width);
+            let comp_y = chunks[1]
+                .y
+                .saturating_sub(comp_h)
+                .max(chunks[0].y);
+            let comp_rect = Rect {
+                x: chunks[1].x,
+                y: comp_y,
+                width: comp_w,
+                height: comp_h,
+            };
+
+            let sel = app.autocomplete_index.unwrap_or(0);
+            let lines: Vec<Line<'static>> = completions
+                .iter()
+                .enumerate()
+                .map(|(i, (cmd, desc))| {
+                    let style = if i == sel {
+                        Style::default().fg(Color::Black).bg(Color::Cyan)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    Line::from(Span::styled(format!("{:<14}{}", cmd, desc), style))
+                })
+                .collect();
+
+            frame.render_widget(Clear, comp_rect);
+            frame.render_widget(
+                Paragraph::new(lines).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Cyan)),
+                ),
+                comp_rect,
+            );
+        }
+    }
 
     // ── Input area ───────────────────────────────────────────────────────────
     let hint_span = Span::styled(
@@ -57,10 +102,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
             )),
         )
     } else {
-        (
-            Color::Blue,
-            Line::from(app.input.clone()),
-        )
+        (Color::Blue, Line::from(app.input.clone()))
     };
 
     let input_text = Text::from(vec![top_line, Line::from(hint_span)]);
@@ -71,7 +113,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
 
     frame.render_widget(Paragraph::new(input_text).block(input_block), chunks[1]);
 
-    // Cursor sits on the input line (row 0 inside the block, so +1 for top border)
+    // Cursor sits on the input line; hidden while waiting.
     if !app.is_waiting {
         let inner_width = chunks[1].width.saturating_sub(2);
         let col = (app.input.len() as u16).min(inner_width.saturating_sub(1));
@@ -81,7 +123,7 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
     // ── Status bar ───────────────────────────────────────────────────────────
     let s = &app.status;
     let status_line = format!(
-        " session: {} | model: {} | turn: {} | in: {} out: {}",
+        " {} | {} | turn {} | in {} out {}",
         s.session_id, s.model, s.turn, s.tokens_in, s.tokens_out,
     );
     frame.render_widget(

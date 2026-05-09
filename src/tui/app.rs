@@ -1,4 +1,9 @@
-use tokio::sync::mpsc;
+use std::sync::Arc;
+
+use tokio::sync::{Mutex, mpsc};
+use tokio::task::JoinHandle;
+
+use crate::types::Message;
 
 #[derive(Debug)]
 pub enum StreamEvent {
@@ -44,10 +49,21 @@ pub struct App {
     pub should_quit: bool,
     pub status: StatusInfo,
     pub stream_rx: Option<mpsc::Receiver<StreamEvent>>,
+    pub cwd: String,
+    // Shared API message history — also used by agent tasks.
+    pub api_history: Arc<Mutex<Vec<Message>>>,
+    // Input history navigation.
+    pub input_history: Vec<String>,
+    pub history_index: Option<usize>,
+    pub history_draft: String,
+    // Selected autocomplete entry index.
+    pub autocomplete_index: Option<usize>,
+    // Handle for the running agent task (for cancellation).
+    pub agent_handle: Option<JoinHandle<()>>,
 }
 
 impl App {
-    pub fn new(session_id: String) -> Self {
+    pub fn new(session_id: String, cwd: String, api_history: Arc<Mutex<Vec<Message>>>) -> Self {
         Self {
             messages: Vec::new(),
             input: String::new(),
@@ -63,20 +79,23 @@ impl App {
                 tokens_out: 0,
             },
             stream_rx: None,
+            cwd,
+            api_history,
+            input_history: Vec::new(),
+            history_index: None,
+            history_draft: String::new(),
+            autocomplete_index: None,
+            agent_handle: None,
         }
     }
 
     pub fn push_message(&mut self, msg: ChatMessage) {
         self.messages.push(msg);
-        self.scroll_offset = usize::MAX; // draw clamps this to max valid offset
+        self.scroll_offset = usize::MAX;
     }
 
     pub fn scroll_up(&mut self) {
-        // draw will clamp to max_offset; total_lines is a safe upper bound
-        self.scroll_offset = self
-            .scroll_offset
-            .saturating_add(1)
-            .min(self.total_lines);
+        self.scroll_offset = self.scroll_offset.saturating_add(1).min(self.total_lines);
     }
 
     pub fn scroll_down(&mut self) {
@@ -84,10 +103,80 @@ impl App {
     }
 
     pub fn clear_input(&mut self) -> String {
+        self.autocomplete_index = None;
         std::mem::take(&mut self.input)
     }
 
     pub fn start_stream(&mut self, rx: mpsc::Receiver<StreamEvent>) {
         self.stream_rx = Some(rx);
+    }
+
+    /// Push text to history and reset navigation state.
+    pub fn history_push(&mut self, text: &str) {
+        if !text.trim().is_empty()
+            && self.input_history.last().map(|s| s.as_str()) != Some(text)
+        {
+            self.input_history.push(text.to_string());
+        }
+        self.history_index = None;
+        self.history_draft.clear();
+    }
+
+    /// Navigate to an older history entry.
+    pub fn history_prev(&mut self) {
+        if self.input_history.is_empty() {
+            return;
+        }
+        match self.history_index {
+            None => {
+                self.history_draft = self.input.clone();
+                self.history_index = Some(self.input_history.len() - 1);
+            }
+            Some(0) => return,
+            Some(i) => self.history_index = Some(i - 1),
+        }
+        if let Some(i) = self.history_index {
+            self.input = self.input_history[i].clone();
+        }
+        self.autocomplete_index = None;
+    }
+
+    /// Navigate to a newer history entry, or back to the draft.
+    pub fn history_next(&mut self) {
+        match self.history_index {
+            None => return,
+            Some(i) if i + 1 >= self.input_history.len() => {
+                self.history_index = None;
+                self.input = std::mem::take(&mut self.history_draft);
+            }
+            Some(i) => {
+                self.history_index = Some(i + 1);
+                self.input = self.input_history[i + 1].clone();
+            }
+        }
+        self.autocomplete_index = None;
+    }
+
+    /// Returns slash-command completions for the current input.
+    pub fn current_completions(&self) -> Vec<(&'static str, &'static str)> {
+        if self.input.starts_with('/') {
+            super::commands::completions(&self.input)
+        } else {
+            vec![]
+        }
+    }
+
+    /// Abort the running agent task and update UI state.
+    pub fn cancel_agent(&mut self) {
+        if let Some(handle) = self.agent_handle.take() {
+            handle.abort();
+        }
+        self.is_waiting = false;
+        self.stream_rx = None;
+        self.push_message(ChatMessage {
+            role: "system".into(),
+            content: "Interrupted.".into(),
+            message_type: MessageType::System,
+        });
     }
 }

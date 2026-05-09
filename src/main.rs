@@ -3,6 +3,7 @@ use clap::Parser;
 
 mod agent;
 mod providers;
+mod tools;
 mod types;
 
 const SYSTEM: &str = "You are a minimal CLI coding agent. Be concise and precise.";

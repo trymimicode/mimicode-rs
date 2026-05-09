@@ -5,6 +5,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::tui::app::{App, ChatMessage, MessageType};
 use crate::tui::commands;
+use crate::tui::markdown;
 
 // Only non-obvious shortcuts live here.
 const HEADER_HINTS: &str = "Ctrl+C: cancel · Ctrl+D: quit · Ctrl+Y: copy · /help";
@@ -158,12 +159,22 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
 }
 
 fn message_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
+    // Assistant messages are rendered as markdown.
+    if msg.message_type == MessageType::Assistant {
+        let mut lines = if msg.content.is_empty() {
+            vec![]
+        } else {
+            markdown::render(&msg.content)
+        };
+        lines.push(Line::default()); // blank separator
+        return lines;
+    }
+
     let (prefix, style): (&str, Style) = match msg.message_type {
         MessageType::User => (
             "> ",
             Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
         ),
-        MessageType::Assistant => ("", Style::default().fg(Color::White)),
         MessageType::ToolCall => (
             "⚙ ",
             Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM),
@@ -180,6 +191,7 @@ fn message_lines(msg: &ChatMessage) -> Vec<Line<'static>> {
             "• ",
             Style::default().fg(Color::Yellow).add_modifier(Modifier::DIM),
         ),
+        MessageType::Assistant => unreachable!(),
     };
 
     let mut lines: Vec<Line<'static>> = if msg.content.is_empty() {

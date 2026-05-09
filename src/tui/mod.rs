@@ -1,6 +1,7 @@
 pub mod app;
 pub mod commands;
 pub mod events;
+pub mod markdown;
 pub mod ui;
 
 use std::io::stdout;

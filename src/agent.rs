@@ -11,6 +11,73 @@ use crate::types::{ContentBlock, Message, MessageContent};
 const MODEL: &str = "claude-haiku-4-5-20251001";
 const MAX_STEPS: usize = 25;
 
+fn tool_definitions() -> Vec<serde_json::Value> {
+    serde_json::from_str(r#"[
+      {
+        "name": "bash",
+        "description": "Run a shell command. stdout and stderr are merged. Output capped at 100KB (tail kept).",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "cmd":     { "type": "string", "description": "The shell command to run." },
+            "timeout": { "type": "number", "description": "Optional timeout in seconds." }
+          },
+          "required": ["cmd"]
+        }
+      },
+      {
+        "name": "read",
+        "description": "Read a text file with 1-indexed line numbers. Returns up to 2000 lines by default.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "path":   { "type": "string",  "description": "Path to the file." },
+            "offset": { "type": "integer", "description": "1-indexed line to start from (default 1)." },
+            "limit":  { "type": "integer", "description": "Max lines to return (default 2000)." }
+          },
+          "required": ["path"]
+        }
+      },
+      {
+        "name": "write",
+        "description": "Write (or overwrite) a file with the given content. Creates parent directories.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "path":    { "type": "string", "description": "Destination path." },
+            "content": { "type": "string", "description": "Full file content to write." }
+          },
+          "required": ["path", "content"]
+        }
+      },
+      {
+        "name": "edit",
+        "description": "Replace exact text in a file. Use old_text+new_text for a single edit, or edits[] for a batch (atomic). Each old_text must match exactly once.",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "path":     { "type": "string", "description": "File to edit." },
+            "old_text": { "type": "string", "description": "Exact text to replace (single edit)." },
+            "new_text": { "type": "string", "description": "Replacement text (single edit)." },
+            "edits": {
+              "type": "array",
+              "description": "Batch of edits applied atomically.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "old_text": { "type": "string" },
+                  "new_text": { "type": "string" }
+                },
+                "required": ["old_text", "new_text"]
+              }
+            }
+          },
+          "required": ["path"]
+        }
+      }
+    ]"#).unwrap()
+}
+
 pub async fn agent_turn(
     user_msg: &str,
     history: &mut Vec<Message>,
@@ -20,7 +87,7 @@ pub async fn agent_turn(
     history.push(Message { role: "user".into(), content: MessageContent::Text(user_msg.into()) });
 
     for _ in 0..MAX_STEPS {
-        let reply = call_claude(history, system, MODEL).await?;
+        let reply = call_claude(history, system, MODEL, tool_definitions()).await?;
 
         let tool_uses: Vec<(String, String, Value)> = match &reply.content {
             MessageContent::Blocks(blocks) => blocks

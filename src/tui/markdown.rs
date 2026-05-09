@@ -30,6 +30,7 @@ struct Ctx {
     in_item: bool,
     item_prefix_done: bool,
     item_indent_width: usize,
+    link_url: Option<String>,
     in_table: bool,
     table_in_header: bool,
     table_alignments: Vec<Alignment>,
@@ -398,6 +399,9 @@ impl Ctx {
         if self.bold   { s = s.add_modifier(Modifier::BOLD); }
         if self.italic { s = s.add_modifier(Modifier::ITALIC); }
         if self.strike { s = s.add_modifier(Modifier::CROSSED_OUT); }
+        if self.link_url.is_some() {
+            s = s.fg(Color::LightBlue).add_modifier(Modifier::UNDERLINED);
+        }
         s
     }
 
@@ -499,6 +503,9 @@ impl Ctx {
                 self.in_item = true;
                 self.item_prefix_done = false;
             }
+            Tag::Link { dest_url, .. } => {
+                self.link_url = Some(dest_url.into_string());
+            }
             Tag::BlockQuote(_) => self.blockquote += 1,
             Tag::Table(aligns) => {
                 if !self.spans.is_empty() { self.flush(); }
@@ -582,6 +589,8 @@ impl Ctx {
                 self.code_buf.clear();
             }
 
+            TagEnd::Link => { self.link_url = None; }
+
             TagEnd::Strong      => self.bold   = false,
             TagEnd::Emphasis    => self.italic  = false,
             TagEnd::Strikethrough => self.strike = false,
@@ -635,27 +644,55 @@ impl Ctx {
                 for (row, _) in &rows {
                     for (i, cell) in row.iter().enumerate() {
                         if i < cols {
-                            col_widths[i] = col_widths[i].max(cell.chars().count());
+                            // Measure the widest line within the cell, not the whole string
+                            let max_w = cell.lines()
+                                .map(|l| l.chars().count())
+                                .max()
+                                .unwrap_or_else(|| cell.chars().count());
+                            col_widths[i] = col_widths[i].max(max_w);
                         }
                     }
                 }
 
                 self.lines.push(table_sep('┌', '─', '┬', '┐', &col_widths));
                 for (row, is_header) in &rows {
-                    let mut spans: Vec<Span<'static>> =
-                        vec![Span::styled("│".to_string(), border_style())];
-                    for (i, &w) in col_widths.iter().enumerate() {
-                        let cell  = row.get(i).map(|s| s.as_str()).unwrap_or("");
-                        let align = aligns.get(i).copied().unwrap_or(Alignment::None);
-                        let cell_style = if *is_header {
-                            Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default().fg(Color::White)
-                        };
-                        spans.push(Span::styled(format!(" {} ", pad_cell(cell, w, align)), cell_style));
-                        spans.push(Span::styled("│".to_string(), border_style()));
+                    // Split every cell into its lines so multi-line cells render correctly
+                    let cell_lines: Vec<Vec<&str>> = (0..cols)
+                        .map(|i| {
+                            row.get(i)
+                                .map(|s| s.lines().collect::<Vec<&str>>())
+                                .unwrap_or_default()
+                        })
+                        .collect();
+
+                    let row_height = cell_lines.iter()
+                        .map(|lines| lines.len().max(1))
+                        .max()
+                        .unwrap_or(1);
+
+                    let cell_style = if *is_header {
+                        Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+
+                    for line_idx in 0..row_height {
+                        let mut spans: Vec<Span<'static>> =
+                            vec![Span::styled("│".to_string(), border_style())];
+                        for (i, &w) in col_widths.iter().enumerate() {
+                            let line = cell_lines.get(i)
+                                .and_then(|lines| lines.get(line_idx).copied())
+                                .unwrap_or("");
+                            let align = aligns.get(i).copied().unwrap_or(Alignment::None);
+                            spans.push(Span::styled(
+                                format!(" {} ", pad_cell(line, w, align)),
+                                cell_style,
+                            ));
+                            spans.push(Span::styled("│".to_string(), border_style()));
+                        }
+                        self.lines.push(Line::from(spans));
                     }
-                    self.lines.push(Line::from(spans));
+
                     if *is_header {
                         self.lines.push(table_sep('├', '─', '┼', '┤', &col_widths));
                     }

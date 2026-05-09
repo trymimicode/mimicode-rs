@@ -148,9 +148,20 @@ pub fn draw(frame: &mut ratatui::Frame, app: &mut App) {
 
     // ── Status bar ───────────────────────────────────────────────────────────
     let s = &app.status;
+    let spinner = if app.is_waiting {
+        const FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let tick = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            / 100;
+        format!("  {}", FRAMES[(tick as usize) % FRAMES.len()])
+    } else {
+        String::new()
+    };
     let status_line = format!(
-        " {} | {} | turn {} | in {} out {}",
-        s.session_id, s.model, s.turn, s.tokens_in, s.tokens_out,
+        " {} | {} | turn {} | in {} out {}{}",
+        s.session_id, s.model, s.turn, s.tokens_in, s.tokens_out, spinner,
     );
     frame.render_widget(
         Paragraph::new(status_line).style(Style::default().fg(Color::DarkGray)),

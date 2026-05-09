@@ -315,7 +315,6 @@ pub async fn agent_turn_streaming(
     use crate::tui::app::{StatusInfo, StreamEvent};
 
     let turn_choice = route_turn(user_msg);
-    eprintln!("[model_route] model={} reason={}", turn_choice.model, turn_choice.reason);
     let step_system = augment_system_prompt(system, &turn_choice.guidance);
 
     let mut hist = history.lock().await;

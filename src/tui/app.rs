@@ -100,11 +100,13 @@ impl App {
     }
 
     pub fn scroll_up(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_add(1).min(self.total_lines);
+        // Decrease skip-offset → reveal older lines above the current view.
+        self.scroll_offset = self.scroll_offset.saturating_sub(3);
     }
 
     pub fn scroll_down(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(1);
+        // Increase skip-offset → reveal newer lines below the current view.
+        self.scroll_offset = self.scroll_offset.saturating_add(3).min(self.total_lines);
     }
 
     pub fn clear_input(&mut self) -> String {
